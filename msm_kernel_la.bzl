@@ -108,6 +108,7 @@ EOF
         ] + [fragment for fragment in build_config_fragments] + [
             "build.config.msm.common",
             "build.config.msm.perf",
+            "build.config.moto",
         ],
     )
 
