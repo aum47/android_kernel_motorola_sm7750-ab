@@ -1224,6 +1224,7 @@ static inline bool walt_flag_test(struct task_struct *p, unsigned int feature)
 /* higher number, better priority */
 #define WALT_RTG_MVP		0
 
+#if IS_ENABLED(CONFIG_SCHED_MOTO_UNFAIR)
 /* Moto huangzq2: reserve mvp prioriteis (11~100) for moto_sched */
 #define UX_PRIO_TOPAPP		70 // must be aligned with moto_sched!
 
@@ -1231,6 +1232,12 @@ static inline bool walt_flag_test(struct task_struct *p, unsigned int feature)
 #define WALT_TASK_BOOST_MVP	UX_PRIO_TOPAPP // align to UX_PRIO_TOPAPP in moto_sched
 #define WALT_LL_MVP		103
 #define WALT_PIPELINE_MVP	104
+#else
+#define WALT_BINDER_MVP		1
+#define WALT_TASK_BOOST_MVP	2
+#define WALT_LL_MVP		3
+#define WALT_PIPELINE_MVP	4
+#endif
 
 #define WALT_NOT_MVP		-1
 
@@ -1374,7 +1381,12 @@ extern struct rq *__migrate_task(struct rq *rq, struct rq_flags *rf,
 
 DECLARE_PER_CPU(u64, rt_task_arrival_time);
 extern int walt_get_mvp_task_prio(struct task_struct *p);
+
+#if IS_ENABLED(CONFIG_SCHED_MOTO_UNFAIR)
 extern void walt_cfs_deactivate_mvp_task(struct rq *rq, struct task_struct *p, unsigned int reason); // Moto huangzq2: debugging enhancement.
+#else
+extern void walt_cfs_deactivate_mvp_task(struct rq *rq, struct task_struct *p);
+#endif
 
 void inc_rq_walt_stats(struct rq *rq, struct task_struct *p);
 void dec_rq_walt_stats(struct rq *rq, struct task_struct *p);
