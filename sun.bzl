@@ -2,6 +2,7 @@ load(":image_opts.bzl", "boot_image_opts")
 load(":msm_kernel_16k_la.bzl", "define_msm_16k_la")
 load(":msm_kernel_la.bzl", "define_msm_la")
 load(":target_variants.bzl", "la_variants")
+load(":moto_product.bzl", "mmi_product_name")
 
 target_name = "sun"
 
@@ -324,6 +325,12 @@ def define_sun():
         "lib/test_user_copy.ko",
     ]
 
+    _sun_moto_in_tree_modules = {
+        "leap": [
+        # keep sorted
+        ],
+    }
+
     kernel_vendor_cmdline_extras = ["bootconfig"]
 
     for variant in la_variants:
@@ -352,10 +359,16 @@ def define_sun():
             kernel_vendor_cmdline_extras += ["nosoftlockup console=ttynull qcom_geni_serial.con_enabled=0"]
             board_bootconfig_extras += ["androidboot.serialconsole=0"]
 
+
+        moto_in_tree_modules = [ ]
+        for p, v in _sun_moto_in_tree_modules.items():
+             if p == mmi_product_name:
+                moto_in_tree_modules = v
+
         define_msm_la(
             msm_target = target_name,
             variant = variant,
-            in_tree_module_list = mod_list,
+            in_tree_module_list = mod_list + moto_in_tree_modules,
             boot_image_opts = boot_image_opts(
                 kernel_vendor_cmdline_extras = kernel_vendor_cmdline_extras,
                 board_kernel_cmdline_extras = board_kernel_cmdline_extras,
