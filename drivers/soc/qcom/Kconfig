@@ -25,6 +25,12 @@ config CCI_DEBUG_INTF
 	help
 	  This is enabling cci debug tool.
 
+config AF_NOISE_ELIMINATION
+	default n
+	bool "enable af noise elimination"
+	help
+	  This is enabling af noise elimination.
+
 config SPS
 	tristate "SPS support"
 	select GENERIC_ALLOCATOR
