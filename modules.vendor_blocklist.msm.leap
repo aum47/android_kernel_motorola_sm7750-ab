@@ -2,3 +2,4 @@
 #blocklist 8250_of
 blocklist qm35_spi
 blocklist watchdogtest
+blocklist moto_pm_vh
