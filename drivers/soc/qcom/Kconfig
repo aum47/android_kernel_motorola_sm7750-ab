@@ -1122,6 +1122,12 @@ config QCOM_SPMI_PMIC_ERR_DBG
 	  conditions, to collect and dump several PMIC arbiter registers and
 	  optionally some more debug data from test bus registers.
 
+config DRM_DYNAMIC_REFRESH_RATE
+	tristate "panel refresh rate notifier"
+	depends on DRM
+	help
+	  Enabling this option adds panel refresh rate APIs.
+
 config QTI_PMIC_GLINK
 	tristate "Enable support for PMIC GLINK"
 	depends on RPMSG
