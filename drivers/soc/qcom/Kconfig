@@ -1128,6 +1128,12 @@ config DRM_DYNAMIC_REFRESH_RATE
 	help
 	  Enabling this option adds panel refresh rate APIs.
 
+config MOT_SENSOR_STRICT_PERFRAMECONTROL
+	default n
+	bool "enable sensor strict perframe control"
+	help
+	  This is enabling sensor strict perframe control.
+
 config QTI_PMIC_GLINK
 	tristate "Enable support for PMIC GLINK"
 	depends on RPMSG
