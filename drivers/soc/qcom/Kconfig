@@ -37,6 +37,12 @@ config MOT_SENSOR_PRE_POWERUP
 	help
 	  This is enabling camera sensor pre powerup feature.
 
+config CAM_SENSOR_PROBE_DEBUG
+	default n
+	bool "enable camera sensor probe debug"
+	help
+	  This is enabling camera sensor probe debug feature.
+
 config SPS
 	tristate "SPS support"
 	select GENERIC_ALLOCATOR
