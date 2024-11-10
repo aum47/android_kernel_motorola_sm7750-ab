@@ -1123,8 +1123,7 @@ static int bcl_version_init_and_check(struct bcl_device *bcl_perph)
 
 static void bcl_configure_bcl_peripheral(struct bcl_device *bcl_perph)
 {
-	//MMI_STOPSHIP <Kernel/BSP - PMIC>: Disable BCL in kernel
-	bcl_write_register(bcl_perph, BCL_MONITOR_EN, 0);
+	bcl_write_register(bcl_perph, BCL_MONITOR_EN, BIT(7));
 }
 
 static int bcl_remove(struct platform_device *pdev)
