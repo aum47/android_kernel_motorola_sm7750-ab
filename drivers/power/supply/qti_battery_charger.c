@@ -1012,8 +1012,8 @@ static int wls_psy_get_prop(struct power_supply *psy,
 	if (rc < 0)
 		return rc;
 #else
-	if (rc == -ETIMEDOUT || rc == -ECONNRESET) {
-		pr_err("read prop:%d timeout, use old prop value\n", prop_id);
+	if (rc == -ETIMEDOUT || rc == -ECONNRESET || rc == -ENODATA) {
+		pr_err("wls read prop:%d timeout, use old prop value, rc = %d\n", prop_id, rc);
 		rc = 0;
 	} else if (rc < 0) {
 		pr_err("read prop:%d error, rc = %d", prop_id, rc);
@@ -1153,8 +1153,8 @@ static int usb_psy_get_prop(struct power_supply *psy,
 	if (rc < 0)
 		return rc;
 #else
-	if (rc == -ETIMEDOUT || rc == -ECONNRESET) {
-		pr_err("read prop:%d timeout, use old prop value\n", prop_id);
+	if (rc == -ETIMEDOUT || rc == -ECONNRESET || rc == -ENODATA) {
+		pr_err("usb read prop:%d timeout, use old prop value, rc = %d\n", prop_id, rc);
 		rc = 0;
 	} else if (rc < 0) {
 		pr_err("read prop:%d error, rc = %d", prop_id, rc);
@@ -1448,8 +1448,8 @@ static int battery_psy_get_prop(struct power_supply *psy,
 	if (rc < 0)
 		return rc;
 #else
-	if (rc == -ETIMEDOUT || rc == -ECONNRESET) {
-		pr_err("read prop:%d timeout or connection reset, use old prop value\n", prop_id);
+	if (rc == -ETIMEDOUT || rc == -ECONNRESET || rc == -ENODATA) {
+		pr_err("batt read prop:%d timeout or connection reset, use old prop value, rc = %d\n", prop_id, rc);
 		rc = 0;
 	} else if (rc < 0) {
 		pr_err("read prop:%d error, rc = %d", prop_id, rc);
