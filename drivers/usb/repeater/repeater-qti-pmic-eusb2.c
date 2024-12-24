@@ -349,11 +349,13 @@ static int eusb2_repeater_init(struct usb_repeater *ur)
 				er->param_override_seq_cnt);
 
 	/* override init sequence using values from userspace */
+	mutex_lock(&er->user_param_lock);
 	if (er->user_param_override_seq &&
 	    er->user_param_override_seq_cnt > 0) {
 		eusb2_repeater_update_seq(er, er->user_param_override_seq,
 				er->user_param_override_seq_cnt);
 	}
+	mutex_unlock(&er->user_param_lock);
 
 	/* override tune params using debugfs based values */
 	if (er->usb2_crossover <= 0x7)
