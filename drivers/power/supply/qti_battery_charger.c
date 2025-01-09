@@ -57,8 +57,21 @@
 #define WLS_FW_UPDATE_TIME_MS		1000
 #define WLS_FW_BUF_SIZE			128
 #define DEFAULT_RESTRICT_FCC_UA		1000000
+#define RADIO_MAX_LEN 33
 
 static bool wls_fw_udating = false;
+
+enum mmi_charger_sku_type
+{
+	MMI_CHARGER_SKU_PRC = 0x01,
+	MMI_CHARGER_SKU_ROW,
+	MMI_CHARGER_SKU_NA,
+	MMI_CHARGER_SKU_VZW,
+	MMI_CHARGER_SKU_JPN,
+	MMI_CHARGER_SKU_ITA,
+	MMI_CHARGER_SKU_NAE,
+	MMI_CHARGER_SKU_SUPERSET,
+};
 
 enum psy_type {
 	PSY_TYPE_BATTERY,
@@ -2396,12 +2409,138 @@ static void battery_chg_add_debugfs(struct battery_chg_dev *bcdev)
 static void battery_chg_add_debugfs(struct battery_chg_dev *bcdev) { }
 #endif
 
+static int mmi_get_wls_coil_id(const char **coilid_buf)
+{
+	struct device_node *np = of_find_node_by_path("/chosen");
+	int retval;
+
+	*coilid_buf = NULL;
+
+	if (np)
+		retval = of_property_read_string(np, "mmi,wireless_coil_id",
+				coilid_buf);
+	else
+		return 0;
+
+	if ((retval == -EINVAL) || !*coilid_buf) {
+		pr_err("Coilid unused\n");
+		of_node_put(np);
+		return retval;
+
+	} else
+		pr_err("Coilid = %s\n", *coilid_buf);
+
+	of_node_put(np);
+
+	return 0;
+}
+
+static int mmi_get_bootarg_dt(char *key, char **value, char *prop, char *spl_flag)
+{
+	const char *bootargs_tmp = NULL;
+	char *idx = NULL;
+	char *kvpair = NULL;
+	int err = 1;
+	struct device_node *n = of_find_node_by_path("/chosen");
+	size_t bootargs_tmp_len = 0;
+	char *bootargs_str = NULL;
+
+	if (n == NULL)
+		goto err;
+
+	if (of_property_read_string(n, prop, &bootargs_tmp) != 0)
+		goto putnode;
+
+	bootargs_tmp_len = strlen(bootargs_tmp);
+	if (!bootargs_str) {
+		/* The following operations need a non-const
+		 * version of bootargs
+		 */
+		bootargs_str = kzalloc(bootargs_tmp_len + 1, GFP_KERNEL);
+		if (!bootargs_str)
+			goto putnode;
+	}
+	strlcpy(bootargs_str, bootargs_tmp, bootargs_tmp_len + 1);
+
+	idx = strnstr(bootargs_str, key, strlen(bootargs_str));
+	if (idx) {
+		kvpair = strsep(&idx, " ");
+		if (kvpair)
+			if (strsep(&kvpair, "=")) {
+				*value = strsep(&kvpair, spl_flag);
+				if (*value)
+					err = 0;
+			}
+	}
+
+putnode:
+	of_node_put(n);
+err:
+	return err;
+}
+
+static int mmi_get_bootarg(char *key, char **value)
+{
+#ifdef CONFIG_BOOT_CONFIG
+	return mmi_get_bootarg_dt(key, value, "mmi,bootconfig", "\n");
+#else
+	return mmi_get_bootarg_dt(key, value, "bootargs", " ");
+#endif
+}
+
+static int mmi_get_sku_type(u32 *sku_type)
+{
+	char *s = NULL;
+	char androidboot_radio_str[RADIO_MAX_LEN];
+
+	if (mmi_get_bootarg("androidboot.radio=", &s) == 0) {
+		if (s != NULL) {
+			strlcpy(androidboot_radio_str, s, RADIO_MAX_LEN);
+			if (!strncmp("PRC", androidboot_radio_str, 3)) {
+				*sku_type = MMI_CHARGER_SKU_PRC;
+			} else if (!strncmp("ROW", androidboot_radio_str, 3)) {
+				*sku_type = MMI_CHARGER_SKU_ROW;
+			} else if (!strncmp("NA", androidboot_radio_str, 2)) {
+				*sku_type = MMI_CHARGER_SKU_NA;
+			} else if (!strncmp("VZW", androidboot_radio_str, 3)) {
+				*sku_type = MMI_CHARGER_SKU_VZW;
+			} else if (!strncmp("JPN", androidboot_radio_str, 3)) {
+				*sku_type = MMI_CHARGER_SKU_JPN;
+			} else if (!strncmp("ITA", androidboot_radio_str, 3)) {
+				*sku_type = MMI_CHARGER_SKU_ITA;
+			} else if (!strncmp("NAE", androidboot_radio_str, 3)) {
+				*sku_type = MMI_CHARGER_SKU_NAE;
+			} else if (!strncmp("SUPERSET", androidboot_radio_str, 8)) {
+				*sku_type = MMI_CHARGER_SKU_SUPERSET;
+			} else {
+				*sku_type = 0;
+			}
+			pr_info("SKU type: %s, 0x%02x\n", androidboot_radio_str, *sku_type);
+			return 0;
+		} else {
+			pr_err("Could not get SKU type\n");
+			return -1;
+		}
+	} else {
+		pr_err("Could not get radio bootarg\n");
+		return -1;
+	}
+}
+
 static int battery_chg_parse_dt(struct battery_chg_dev *bcdev)
 {
 	struct device_node *node = bcdev->dev->of_node;
 	struct psy_state *pst = &bcdev->psy_list[PSY_TYPE_BATTERY];
 	int i, rc, len;
 	u32 prev, val;
+	bool wls_2nd_fw_en_by_sku = false;
+	bool wls_2nd_fw_en_by_coil_id = false;
+	const char *wls_fw_name_2nd;
+	const char *wls_coil_hw;
+	const char *wls_coil_id;
+	const char *wls_coil_id_2nd;
+	u32 sku;
+	u32 *sku_use_2nd_fw;
 
 	of_property_read_string(node, "qcom,wireless-fw-name",
 				&bcdev->wls_fw_name);
@@ -2413,6 +2552,73 @@ static int battery_chg_parse_dt(struct battery_chg_dev *bcdev)
 
 	if (bcdev->wls_fw_name && strstr(bcdev->wls_fw_name, "cps"))
 		bcdev->wls_fw_vendor = WLS_CPS;
+
+	wls_2nd_fw_en_by_sku = of_property_read_bool(bcdev->dev->of_node, "mmi,wls-2nd-fw-by-sku");
+	wls_2nd_fw_en_by_coil_id = of_property_read_bool(bcdev->dev->of_node, "mmi,wls-2nd-fw-by-coil-id");
+
+	if (wls_2nd_fw_en_by_coil_id) {
+		rc = of_property_read_string(node, "qcom,wireless-coil-id",
+					&wls_coil_id);
+		if (rc)
+			wls_coil_id = NULL;
+
+		rc = of_property_read_string(node, "qcom,wireless-fw-name-2nd",
+					&wls_fw_name_2nd);
+		if (rc)
+			wls_fw_name_2nd = NULL;
+
+		rc = of_property_read_string(node, "qcom,wireless-coil-id-2nd",
+					&wls_coil_id_2nd);
+		if (rc)
+			wls_coil_id_2nd = NULL;
+
+		if (wls_fw_name_2nd && wls_coil_id_2nd) {
+			mmi_get_wls_coil_id(&wls_coil_hw);
+			pr_info("coid hw id %s, coil fw id: %s, coil fw id 2nd: %s\n",
+					wls_coil_hw, wls_coil_id, wls_coil_id_2nd);
+			if (!strcmp(wls_coil_id_2nd, wls_coil_hw)) {
+				of_property_read_string(node, "qcom,wireless-fw-name-2nd",
+					&bcdev->wls_fw_name);
+			}
+		}
+	} else if (wls_2nd_fw_en_by_sku) {
+		rc = of_property_read_string(node, "qcom,wireless-fw-name-2nd",
+					&wls_fw_name_2nd);
+		if (rc)
+			wls_fw_name_2nd = NULL;
+
+		if (wls_fw_name_2nd) {
+			mmi_get_sku_type(&sku);
+			len = of_property_count_elems_of_size(node, "mmi,wls-2nd-fw-sku",
+								sizeof(u32));
+			if (len <= 0) {
+				return 0;
+			}
+
+			sku_use_2nd_fw = devm_kcalloc(bcdev->dev, len,
+					sizeof(*sku_use_2nd_fw),
+					GFP_KERNEL);
+			if (!sku_use_2nd_fw)
+				return 0;
+
+			rc = of_property_read_u32_array(node, "mmi,wls-2nd-fw-sku",
+				&sku_use_2nd_fw[0], len);
+			if (rc < 0) {
+				pr_err("Error in reading mmi,wls-2nd-fw-sku, rc=%d\n", rc);
+				return 0;
+			}
+
+			for (i = 0; i < len; i++) {
+				if (sku == sku_use_2nd_fw[i]) {
+					pr_info("match sku[%d]: %02x\n", i, sku_use_2nd_fw[i]);
+					of_property_read_string(node, "qcom,wireless-fw-name-2nd",
+						&bcdev->wls_fw_name);
+					break;
+				}
+			}
+		}
+	}
+	pr_info("wlc firmware name: %s\n", bcdev->wls_fw_name);
 
 	rc = read_property_id(bcdev, pst, BATT_CHG_CTRL_LIM_MAX);
 	if (rc < 0) {
