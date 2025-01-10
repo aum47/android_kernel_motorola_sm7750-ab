@@ -697,6 +697,83 @@ static void android_rvh_is_cpu_allowed(void *unused, struct task_struct *p, int 
 	}
 }
 
+static int get_bootargs(char *key, char *value, int size)
+{
+	int ret = false;
+	const char *bootargs_ptr = NULL;
+	char *bootargs_str = NULL;
+	char *idx = NULL;
+	char *kvpair = NULL, *kvalue = NULL;
+	struct device_node *n = of_find_node_by_path("/chosen");
+	size_t bootargs_ptr_len = 0;
+
+	if (n == NULL)
+		goto err;
+
+	if (of_property_read_string(n, "mmi,bootconfig", &bootargs_ptr) != 0)
+		goto err_putnode;
+
+	bootargs_ptr_len = strlen(bootargs_ptr);
+	/* Following operations need a non-const version of bootargs */
+	bootargs_str = kzalloc(bootargs_ptr_len + 1, GFP_KERNEL);
+	if (!bootargs_str)
+		goto err_putnode;
+
+	strlcpy(bootargs_str, bootargs_ptr, bootargs_ptr_len + 1);
+
+	idx = strnstr(bootargs_str, key, strlen(bootargs_str));
+
+	if (!idx)
+		goto out;
+
+	kvpair = strsep(&idx, " ");
+	if (kvpair && strsep(&kvpair, "="))
+		kvalue = strsep(&kvpair, "\n");
+
+	if (kvalue && size >= strlen(kvalue)) {
+		ret = true;
+		memcpy(value, kvalue, strlen(kvalue));
+	}
+
+out:
+	kfree(bootargs_str);
+err_putnode:
+	of_node_put(n);
+err:
+	return ret;
+}
+
+#define PARTNAME_SIZE 32
+static int is_ftrace_on(void)
+{
+	char enable[PARTNAME_SIZE] = { 0 };
+
+	if (get_bootargs("androidboot.ftrace_on=", enable, PARTNAME_SIZE) &&
+		(strcmp(enable, "true") == 0 || strcmp(enable, "1") == 0))
+		return true;
+
+	return false;
+}
+
+/* this hook is only a icky workaround and has no actual significance in code logic. */
+static void foo_update_deadline_handler(void * data, struct cfs_rq *cfs_rq, struct sched_entity *se, bool *skip_preempt)
+{
+	struct rq *rq = rq_of(cfs_rq);
+
+	/* more than 1 task on cfs_rq, check. */
+	if (rq->cfs.h_nr_running > 1) {
+		/* get curr exec time */
+		u64 ran = se->sum_exec_runtime - se->prev_sum_exec_runtime;
+		u64 slice = se->slice;
+		s64 delta = slice - ran;
+		/* already consumed its slice */
+		if (delta < 0) {
+			/* se already consumed its slice, just resched */
+			resched_curr(rq);
+		}
+	}
+}
+
 void walt_halt_init(void)
 {
 	struct sched_param param = { .sched_priority = MAX_RT_PRIO-1 };
@@ -714,7 +791,10 @@ void walt_halt_init(void)
 						android_rvh_set_cpus_allowed_by_task, NULL);
 	register_trace_android_rvh_rto_next_cpu(android_rvh_rto_next_cpu, NULL);
 	register_trace_android_rvh_is_cpu_allowed(android_rvh_is_cpu_allowed, NULL);
-
+	if (is_ftrace_on()){
+		pr_info("Install walt hook:foo_update_deadline_handler\n");
+		register_trace_android_rvh_update_deadline(foo_update_deadline_handler, NULL);
+	}
 }
 
 #endif /* CONFIG_HOTPLUG_CPU */
