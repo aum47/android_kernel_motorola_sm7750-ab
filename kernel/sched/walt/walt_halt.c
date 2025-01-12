@@ -744,11 +744,11 @@ err:
 }
 
 #define PARTNAME_SIZE 32
-static int is_ftrace_on(void)
+static int is_resched_on(void)
 {
 	char enable[PARTNAME_SIZE] = { 0 };
 
-	if (get_bootargs("androidboot.ftrace_on=", enable, PARTNAME_SIZE) &&
+	if (get_bootargs("androidboot.walt_resched_on=", enable, PARTNAME_SIZE) &&
 		(strcmp(enable, "true") == 0 || strcmp(enable, "1") == 0))
 		return true;
 
@@ -791,7 +791,7 @@ void walt_halt_init(void)
 						android_rvh_set_cpus_allowed_by_task, NULL);
 	register_trace_android_rvh_rto_next_cpu(android_rvh_rto_next_cpu, NULL);
 	register_trace_android_rvh_is_cpu_allowed(android_rvh_is_cpu_allowed, NULL);
-	if (is_ftrace_on()){
+	if (is_resched_on()){
 		pr_info("Install walt hook:foo_update_deadline_handler\n");
 		register_trace_android_rvh_update_deadline(foo_update_deadline_handler, NULL);
 	}
