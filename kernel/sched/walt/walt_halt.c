@@ -748,11 +748,15 @@ static int is_resched_on(void)
 {
 	char enable[PARTNAME_SIZE] = { 0 };
 
-	if (get_bootargs("androidboot.walt_resched_on=", enable, PARTNAME_SIZE) &&
-		(strcmp(enable, "true") == 0 || strcmp(enable, "1") == 0))
-		return true;
+	if (get_bootargs("androidboot.walt_resched_on=", enable, PARTNAME_SIZE)) {
+		if (strcmp(enable, "true") == 0 || strcmp(enable, "1") == 0)
+			return true;
+		else
+			return false;
+	}
 
-	return false;
+	//default enable the feature
+	return true;
 }
 
 /* this hook is only a icky workaround and has no actual significance in code logic. */
