@@ -43,6 +43,12 @@ config CAM_SENSOR_PROBE_DEBUG
 	help
 	  This is enabling camera sensor probe debug feature.
 
+config CAM_SENSOR_CTLE_FOR_ORION
+	default n
+	bool "enable camera sensor ctle for orion"
+	help
+	  This is enabling camera sensor ctle for orion feature.
+
 config SPS
 	tristate "SPS support"
 	select GENERIC_ALLOCATOR
