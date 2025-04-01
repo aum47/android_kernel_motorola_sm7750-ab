@@ -19,6 +19,13 @@ config LEAP_DTB
 	help
 		Only include Motorola Leap device specific device tree.
 
+config ROADSTR_DTB
+	depends on MMI_DEVICE_DTBS
+	default n
+	bool "Motorola Mobility roadstr Device DTB"
+	help
+		Only include Motorola roadstr device specific device tree.
+
 config CCI_DEBUG_INTF
 	default n
 	bool "enable cci debug"
