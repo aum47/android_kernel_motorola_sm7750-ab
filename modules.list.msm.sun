@@ -120,3 +120,4 @@ bcl_pmic5.ko
 qcom-cpufreq-hw.ko
 nvmem_qfprom.ko
 qfprom-sys.ko
+midpoint.ko
