@@ -5,3 +5,4 @@ blocklist goodix_fod_mmi
 blocklist qm35_spi
 blocklist watchdogtest
 blocklist moto_pm_vh
+blocklist aw_haptic_hv_v1_5
