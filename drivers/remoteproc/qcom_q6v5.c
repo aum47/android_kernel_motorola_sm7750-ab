@@ -28,12 +28,6 @@
 
 static char qcom_ssr_reason[256];
 static char *ssr_reason = qcom_ssr_reason;
-#if defined(CONFIG_QCOM_ADSP_DEBUG)
-static bool is_debug_build = true;
-#else
-static bool is_debug_build = false;
-#endif
-
 module_param(ssr_reason, charp, S_IRUGO);
 
 static int q6v5_load_state_toggle(struct qcom_q6v5 *q6v5, bool enable)
@@ -199,7 +193,6 @@ static irqreturn_t q6v5_fatal_interrupt(int irq, void *data)
 	struct qcom_q6v5 *q6v5 = data;
 	size_t len;
 	char *msg;
-	bool modem_audio_issue = false;
 
 	if (!q6v5->running)
 		return IRQ_HANDLED;
@@ -211,11 +204,9 @@ static irqreturn_t q6v5_fatal_interrupt(int irq, void *data)
 
 	q6v5->crash_seq = q6v5->seq;
 	msg = qcom_smem_get(QCOM_SMEM_HOST_ANY, q6v5->crash_reason, &len);
-	if (!IS_ERR(msg) && len > 0 && msg[0]) {
+	if (!IS_ERR(msg) && len > 0 && msg[0])
 		dev_err(q6v5->dev, "fatal error received: %s\n", msg);
-		if (strstr(msg, "vs.c 227"))
-			modem_audio_issue = true;
-	} else
+	else
 		dev_err(q6v5->dev, "fatal error without message\n");
 	memset(qcom_ssr_reason, 0, sizeof(qcom_ssr_reason));
 	strlcpy(qcom_ssr_reason, msg, min((size_t)len, (size_t)sizeof(qcom_ssr_reason)));
@@ -232,11 +223,7 @@ static irqreturn_t q6v5_fatal_interrupt(int irq, void *data)
 	if (q6v5->ssr_subdev)
 		qcom_notify_early_ssr_clients(q6v5->ssr_subdev);
 
-	if (is_debug_build && strstr(dev_name(q6v5->dev), "remoteproc-adsp")) {
-		schedule_work(&q6v5->crash_handler);
-	} else if (is_debug_build && strstr(dev_name(q6v5->dev), "remoteproc-mss") && modem_audio_issue) {
-		schedule_work(&q6v5->crash_handler);
-	} else if (q6v5->rproc->recovery_disabled)
+	if (q6v5->rproc->recovery_disabled)
 		queue_work(system_unbound_wq, &q6v5->crash_handler);
 	else
 		rproc_report_crash(q6v5->rproc, RPROC_FATAL_ERROR);
