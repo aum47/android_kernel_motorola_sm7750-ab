@@ -1660,7 +1660,7 @@ static int wireless_fw_send_firmware(struct battery_chg_dev *bcdev,
 	if (!num_chunks)
 		return -EINVAL;
 
-	pr_debug("Updating FW...\n");
+	pr_info("Updating FW..., num_chunks = %d\n", num_chunks);
 
 	ptr = fw->data;
 	msg.hdr.owner = MSG_OWNER_BC;
@@ -1671,7 +1671,7 @@ static int wireless_fw_send_firmware(struct battery_chg_dev *bcdev,
 		msg.fw_chunk_id = i + 1;
 		memcpy(msg.buf, ptr, WLS_FW_BUF_SIZE);
 
-		pr_debug("sending FW chunk %u\n", i + 1);
+		pr_info("sending FW chunk %u\n", i + 1);
 		rc = battery_chg_fw_write(bcdev, &msg, sizeof(msg));
 		if (rc < 0)
 			return rc;
@@ -1682,7 +1682,7 @@ static int wireless_fw_send_firmware(struct battery_chg_dev *bcdev,
 		memset(msg.buf, 0, WLS_FW_BUF_SIZE);
 		memcpy(msg.buf, ptr, partial_chunk_size);
 
-		pr_debug("sending partial FW chunk %u\n", i + 1);
+		pr_info("sending partial FW chunk %u\n", i + 1);
 		rc = battery_chg_fw_write(bcdev, &msg, sizeof(msg));
 		if (rc < 0)
 			return rc;
@@ -1704,7 +1704,6 @@ static int wireless_fw_check_for_update(struct battery_chg_dev *bcdev,
 	req_msg.fw_version = version;
 	req_msg.fw_size = size;
 	req_msg.fw_crc = bcdev->wls_fw_crc;
-
 	return battery_chg_write(bcdev, &req_msg, sizeof(req_msg));
 }
 
@@ -1714,6 +1713,7 @@ static int wireless_fw_check_for_update(struct battery_chg_dev *bcdev,
 #define IDT_FW_MINOR_VER_OFFSET		0x96
 #define CPS_FW_MAJOR_VER_OFFSET		0xc4
 #define CPS_FW_MINOR_VER_OFFSET		0xc5
+#define SC9624_FW_VER_OFFSET		0x104
 static int wireless_fw_update(struct battery_chg_dev *bcdev, bool force)
 {
 	const struct firmware *fw;
@@ -1735,6 +1735,7 @@ static int wireless_fw_update(struct battery_chg_dev *bcdev, bool force)
 	 */
 	pst = &bcdev->psy_list[PSY_TYPE_USB];
 	rc = read_property_id(bcdev, pst, USB_ONLINE);
+
 	if (rc < 0)
 		goto out;
 
@@ -1757,6 +1758,7 @@ static int wireless_fw_update(struct battery_chg_dev *bcdev, bool force)
 	 */
 	pst = &bcdev->psy_list[PSY_TYPE_WLS];
 	rc = read_property_id(bcdev, pst, WLS_ONLINE);
+
 	if (rc < 0)
 		goto out;
 
@@ -1767,6 +1769,7 @@ static int wireless_fw_update(struct battery_chg_dev *bcdev, bool force)
 	}
 
 	rc = firmware_request_nowarn(&fw, bcdev->wls_fw_name, bcdev->dev);
+
 	if (rc) {
 		pr_err("Couldn't get firmware rc=%d\n", rc);
 		goto out;
@@ -1791,6 +1794,9 @@ static int wireless_fw_update(struct battery_chg_dev *bcdev, bool force)
 		min_ver = min_ver >> 8;
 		pr_info("maj_var %#x, min_ver %#x\n", maj_ver, min_ver);
 		version = maj_ver << 16 | min_ver;
+	} else if (strstr(bcdev->wls_fw_name, "9624")) {
+		version = *(u32 *)&fw->data[SC9624_FW_VER_OFFSET];
+		pr_info("southship fw version: %08x\n", version);
 	} else {
 		if (strstr(bcdev->wls_fw_name, "9412")) {
 			maj_ver = le16_to_cpu(*(__le16 *)(fw->data + IDT_FW_MAJOR_VER_OFFSET));
