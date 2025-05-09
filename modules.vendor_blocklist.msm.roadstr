@@ -1,5 +1,7 @@
 #moto vendor_blocklist
 #blocklist 8250_of
+blocklist anc_fps_mmi
+blocklist goodix_fod_mmi
 blocklist qm35_spi
 blocklist watchdogtest
 blocklist moto_pm_vh
