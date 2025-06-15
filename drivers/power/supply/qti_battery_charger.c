@@ -59,6 +59,9 @@
 #define DEFAULT_RESTRICT_FCC_UA		1000000
 #define RADIO_MAX_LEN 33
 
+#define AP_BIN_FW_UPDATE     1
+#define ADSP_FW_UPDATE     2
+
 static bool wls_fw_udating = false;
 
 enum mmi_charger_sku_type
@@ -203,6 +206,7 @@ struct wireless_fw_check_req {
 	u32			fw_version;
 	u32			fw_size;
 	u32			fw_crc;
+	u32			bin_or_h;
 };
 
 struct wireless_fw_check_resp {
@@ -1692,7 +1696,7 @@ static int wireless_fw_send_firmware(struct battery_chg_dev *bcdev,
 }
 
 static int wireless_fw_check_for_update(struct battery_chg_dev *bcdev,
-					u32 version, size_t size)
+					u32 version, size_t size, u32 bin_or_h)
 {
 	struct wireless_fw_check_req req_msg = {};
 
@@ -1704,6 +1708,8 @@ static int wireless_fw_check_for_update(struct battery_chg_dev *bcdev,
 	req_msg.fw_version = version;
 	req_msg.fw_size = size;
 	req_msg.fw_crc = bcdev->wls_fw_crc;
+	req_msg.bin_or_h = bin_or_h;
+
 	return battery_chg_write(bcdev, &req_msg, sizeof(req_msg));
 }
 
@@ -1714,7 +1720,7 @@ static int wireless_fw_check_for_update(struct battery_chg_dev *bcdev,
 #define CPS_FW_MAJOR_VER_OFFSET		0xc4
 #define CPS_FW_MINOR_VER_OFFSET		0xc5
 #define SC9624_FW_VER_OFFSET		0x104
-static int wireless_fw_update(struct battery_chg_dev *bcdev, bool force)
+static int wireless_fw_update(struct battery_chg_dev *bcdev, bool force, int bin_or_h)
 {
 	const struct firmware *fw;
 	struct psy_state *pst;
@@ -1745,8 +1751,8 @@ static int wireless_fw_update(struct battery_chg_dev *bcdev, bool force)
 		if (rc < 0)
 			goto out;
 
-		if ((pst->prop[BATT_CAPACITY] / 100) < 20) {
-			pr_err("Battery SOC should be at least 20%% or connect charger\n");
+		if ((pst->prop[BATT_CAPACITY] / 100) < 15) {
+			pr_err("Battery SOC should be at least 15%% or connect charger\n");
 			rc = -EINVAL;
 			goto out;
 		}
@@ -1811,8 +1817,8 @@ static int wireless_fw_update(struct battery_chg_dev *bcdev, bool force)
 	if (force)
 		version = UINT_MAX;
 
-	pr_info("FW size: %zu version: %#x\n", fw->size, version);
-	rc = wireless_fw_check_for_update(bcdev, version, fw->size);
+	pr_info("FW size: %zu version: %#x bin_or_h:%x\n", fw->size, version, bin_or_h);
+	rc = wireless_fw_check_for_update(bcdev, version, fw->size, bin_or_h);
 	if (rc < 0) {
 		pr_err("Wireless FW update not needed, rc=%d\n", rc);
 		goto release_fw;
@@ -1828,10 +1834,14 @@ static int wireless_fw_update(struct battery_chg_dev *bcdev, bool force)
 	wls_fw_udating = true;
 
 	reinit_completion(&bcdev->fw_update_ack);
+	if(bin_or_h == AP_BIN_FW_UPDATE) { //bin send from AP to ADSP
 	rc = wireless_fw_send_firmware(bcdev, fw);
 	if (rc < 0) {
 		pr_err("Failed to send FW chunk, rc=%d\n", rc);
 		goto release_fw;
+	}
+	} else if(bin_or_h == ADSP_FW_UPDATE) {
+		bcdev->wls_fw_update_time_ms = 40*1000;//40s
 	}
 
 	pr_debug("Waiting for fw_update_ack\n");
@@ -1927,13 +1937,17 @@ static ssize_t wireless_fw_force_update_store(const struct class *c,
 {
 	struct battery_chg_dev *bcdev = container_of(c, struct battery_chg_dev,
 						battery_class);
-	bool val;
+	int val;
 	int rc;
 
-	if (kstrtobool(buf, &val) || !val)
-		return -EINVAL;
 
-	rc = wireless_fw_update(bcdev, true);
+ 	if (kstrtoint(buf, 0, &val) ||
+ 		(val != AP_BIN_FW_UPDATE && val != ADSP_FW_UPDATE)) {
+ 		pr_err("%s: invalid FW update mode %d\n", __func__, val);
+ 		return -EINVAL;
+ 	}
+
+	rc = wireless_fw_update(bcdev, true, val); //force update
 	if (rc < 0)
 		return rc;
 
@@ -1947,14 +1961,17 @@ static ssize_t wireless_fw_update_store(const struct class *c,
 {
 	struct battery_chg_dev *bcdev = container_of(c, struct battery_chg_dev,
 						battery_class);
-	bool val;
+	int val;
 	int rc = 0, retry = 3;
 
-	if (kstrtobool(buf, &val) || !val)
-		return -EINVAL;
+ 	if (kstrtoint(buf, 0, &val) ||
+ 		(val != AP_BIN_FW_UPDATE && val != ADSP_FW_UPDATE)) {
+ 		pr_err("%s: invalid FW update mode %d\n", __func__, val);
+ 		return -EINVAL;
+ 	}
 
 	do{
-		rc = wireless_fw_update(bcdev, false);
+		rc = wireless_fw_update(bcdev, false, val);
 		if (rc != -ETIMEDOUT && rc != -ECONNRESET)
 			break;
 		retry--;
