@@ -63,6 +63,12 @@ config CAM_SENSOR_CTLE_FOR_ORION
 	help
 	  This is enabling camera sensor ctle for orion feature.
 
+config MOT_PON_LOG
+	default n
+	bool "enable saving pon log"
+	help
+		This is enabling pon log saving.
+
 config SPS
 	tristate "SPS support"
 	select GENERIC_ALLOCATOR
