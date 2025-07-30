@@ -46,4 +46,13 @@ config SCHED_MOTO_UNFAIR
 	help
 	  This feature will allow the scheduler to maintain more detailed
 	  mvp scheduling.
+
+config MOTO_STAT
+	tristate "Enable moto stat"
+	depends on SCHED_WALT
+	default n
+	help
+	  This option enables the moto_stat driver, which collects detailed
+	  statistics on kernel subsystems for performance analysis.
+
 endmenu

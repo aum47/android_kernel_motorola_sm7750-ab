@@ -69,6 +69,14 @@ struct walt_related_thread_group {
 	u64			start_ktime_ts;
 };
 
+/* moto stat task statistics for performance monitoring*/
+#if IS_ENABLED(CONFIG_MOTO_STAT)
+struct moto_stats_task_struct {
+	unsigned long	stats_private_ts;
+	unsigned long	direct_reclaim_ts;
+};
+#endif
+
 struct walt_task_struct {
 	/*
 	 * 'mark_start' marks the beginning of an event (task waking up, task
@@ -127,6 +135,9 @@ struct walt_task_struct {
 #if IS_ENABLED(CONFIG_SCHED_MOTO_UNFAIR)
 	u16				ux_type; // Moto huangzq2: add ux flag for moto_sched
 #endif
+#if IS_ENABLED(CONFIG_MOTO_STAT)
+	struct moto_stats_task_struct moto_stats_task;
+#endif
 	bool				wake_up_idle;
 	bool				misfit;
 	bool				rtg_high_prio;
@@ -177,6 +188,13 @@ struct walt_task_struct {
 		void *__mptr = (void *)(wts); \
 		((struct task_struct *)(__mptr - \
 			offsetof(struct task_struct, android_vendor_data1))); })
+
+#if IS_ENABLED(CONFIG_MOTO_STAT)
+static inline struct moto_stats_task_struct *get_moto_stats_task_struct(struct task_struct *p)
+{
+	return &((struct walt_task_struct *)p->android_vendor_data1)->moto_stats_task;
+}
+#endif
 
 static inline bool sched_get_wake_up_idle(struct task_struct *p)
 {
