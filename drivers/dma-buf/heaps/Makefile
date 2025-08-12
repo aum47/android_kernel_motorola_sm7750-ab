@@ -17,3 +17,4 @@ qcom_dma_heaps-$(CONFIG_QCOM_DMABUF_HEAPS_BITSTREAM_CONTIG) += qcom_bitstream_co
 qcom_dma_heaps-$(CONFIG_QCOM_DMABUF_HEAPS_UBWCP) += qcom_ubwcp_heap.o
 qcom_dma_heaps-$(CONFIG_QCOM_DMABUF_HEAPS_TVM_CARVEOUT) += qcom_tvm_carveout_heap.o
 qcom_dma_heaps-$(CONFIG_QCOM_DMABUF_HEAPS_SYSTEM_MOVABLE) += qcom_system_movable_heap.o
+qcom_dma_heaps-$(CONFIG_DMABUF_LLM_HEAPS) +=  llm_core.o llm.o llm_heap.o llm_sysfs.o
