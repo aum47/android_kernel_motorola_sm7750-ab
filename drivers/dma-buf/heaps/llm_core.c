@@ -21,10 +21,11 @@
 
 
 
-#define MAX_DATA_SLOT 16
+#define MAX_DATA_SLOT 32
 
 struct idx_slots {
 	void* slots[MAX_DATA_SLOT];
+	pid_t owner[MAX_DATA_SLOT];
 	int cur_idx;
 	struct mutex i_mutex;
 };
@@ -57,12 +58,14 @@ int deposit_data(void *data)
 	int idx;
 	if (!data) return -1;
 	mutex_lock(&filename_idx_arr.i_mutex);
-	if (filename_idx_arr.slots[filename_idx_arr.cur_idx])
+	idx = filename_idx_arr.cur_idx;
+	if (filename_idx_arr.slots[idx])
 	{
-		kfree(filename_idx_arr.slots[filename_idx_arr.cur_idx]);
+		kfree(filename_idx_arr.slots[idx]);
 	}
-	filename_idx_arr.slots[filename_idx_arr.cur_idx] = data;
-	idx = filename_idx_arr.cur_idx++;
+	filename_idx_arr.slots[idx] = data;
+	filename_idx_arr.owner[idx] = current->pid;
+	filename_idx_arr.cur_idx++;
 	filename_idx_arr.cur_idx = filename_idx_arr.cur_idx%MAX_DATA_SLOT;
 	mutex_unlock(&filename_idx_arr.i_mutex);
 	return idx;
@@ -73,9 +76,12 @@ void *withraw_data(int idx, bool deleted)
 	if ((idx < MAX_DATA_SLOT && idx >=0 ))
 	{
 		mutex_lock(&filename_idx_arr.i_mutex);
-		data = filename_idx_arr.slots[idx];
-		if (deleted)
-			filename_idx_arr.slots[idx] = NULL;
+		if ( filename_idx_arr.owner[idx] == current->pid)
+		{
+			data = filename_idx_arr.slots[idx];
+			if (deleted)
+				filename_idx_arr.slots[idx] = NULL;
+		}
 		mutex_unlock(&filename_idx_arr.i_mutex);
 	}
 	return data;
@@ -100,8 +106,8 @@ long llmheap_handle_deposit_file_info(unsigned long arg)
 
 
 	if (unlikely(strlen(param_data->bin_path) >= LLMHEAP_PATH_MAX)) {
-		pr_err("llmheap: WARNING: func:%s path:%s len:%ld >= %d \n",
-			__func__, param_data->bin_path, strlen(param_data->bin_path),
+		pr_err("llmheap: WARNING: path:%s len:%ld >= %d \n",
+			param_data->bin_path, strlen(param_data->bin_path),
 			(unsigned int)LLMHEAP_PATH_MAX);
 		kfree(param_data);
 		return -EINVAL;
@@ -109,7 +115,7 @@ long llmheap_handle_deposit_file_info(unsigned long arg)
 
 	param_data->idx = deposit_data(param_data);
 
-	pr_debug("%s:%d param_data->idx:%d \n", __func__, __LINE__, param_data->idx);
+	pr_debug("idx:%d %llx %llx \n",param_data->idx, param_data->pos, param_data->bin_len);
 
 	if (copy_to_user((void __user *)arg, param_data, in_size) != 0) {
 		ret = -EFAULT;
@@ -137,13 +143,10 @@ int llmheap_handle_withdraw_file_info(int param_idx)
 	/* release param_data */
 	kfree(param_data);
 
-	pr_debug("%s:%d  free idr and param_data, param_idx:%d! \n",
-		__func__, __LINE__, param_idx);
-
+	pr_debug("free idx :%d! \n", param_idx);
 	return 0;
 }
 
-/* only be used during system_heap_do_allocate */
 struct llmheap_buf_cache *find_llm_cache_by_idx(int param_idx)
 {
 	struct llm_file_info *param_data;
@@ -153,8 +156,10 @@ struct llmheap_buf_cache *find_llm_cache_by_idx(int param_idx)
 	if (!param_data)
 		return NULL;
 
-	llm_cache =  find_llm_cache_by_path(param_data->bin_path, param_data->pos, true);
-	if ( llm_cache) llm_cache->fd = param_data->fd;
+	llm_cache =  find_llm_cache_by_path(param_data->bin_path, param_data->pos, DIV_ROUND_UP(param_data->bin_len, PAGE_SIZE), param_idx, true);
+	if ( llm_cache) {
+		llm_cache->fd = param_data->fd;
+	}
 	return llm_cache;
 }
 
@@ -172,6 +177,7 @@ struct llmheap_buf_cache *create_llm_cache_by_idx(int param_idx, unsigned long l
 	if (llm_cache) {
 		INIT_WORK(&llm_cache->aio_worker, aio_work);
 		llm_cache->fd = param_data->fd;
+		llm_cache->idx = param_idx;
 	}
 	return llm_cache;
 }
@@ -197,6 +203,7 @@ retry:
 	llm_cache_shrink(0, LONG_MAX, llm_cache);
 	/* arrive here, remained pages should have been zero */
 	WARN_ON(llm_cache->remained_pages);
+
 	llm_cache_destroy(llm_cache);
 
 	return 0;
@@ -212,8 +219,10 @@ again:
 	memset(path, 0, LLMHEAP_PATH_MAX);
 	rcu_read_lock();
 	list_for_each_entry_rcu(llm_cache, &llm_cache_list, list) {
-		strncpy(path, llm_cache->bin_path, LLMHEAP_PATH_MAX - 1);
-		break;
+		if (!(llm_cache->flags & DBUF_CACHE_IN_USAGE)) {
+			strncpy(path, llm_cache->bin_path, LLMHEAP_PATH_MAX - 1);
+			break;
+		}
 	}
 	rcu_read_unlock();
 
@@ -227,61 +236,57 @@ again:
 
 
 
-inline struct llmheap_buf_cache *find_llm_cache_by_path(char *path, loff_t pos, bool allocate)
+inline struct llmheap_buf_cache *find_llm_cache_by_path(char *path, loff_t pos, unsigned long pages, int idx, bool allocate)
 {
-	struct llmheap_buf_cache *llm_cache = NULL;
+	struct llmheap_buf_cache *llm_cache = NULL, *target_cache = NULL;
 
 	if (!path)
 		return NULL;
 
 	rcu_read_lock();
 	list_for_each_entry_rcu(llm_cache, &llm_cache_list, list) {
-		if (!strcmp(llm_cache->bin_path, path) && (llm_cache->pos == pos)) {
-			if (!allocate) {
-				spin_lock(&llm_cache->lock);
-				if (llm_cache->is_destroying) {
-					pr_err("ERROR!!!%s search %s during destoying\n", __func__, path);
-					spin_unlock(&llm_cache->lock);
-					llm_cache = NULL;
-				}
-				if (llm_cache) {
-					spin_unlock(&llm_cache->lock);
-					pr_debug("%s find llm_cache for %s allocate:%d\n", __func__, path, allocate);
-				}
-				rcu_read_unlock();
-				return llm_cache;
-			}
-
+		if (!strcmp(llm_cache->bin_path, path)
+			&& (llm_cache->pos == pos) && ( llm_cache->total_pages == pages)) {
 			spin_lock(&llm_cache->lock);
+			if (!allocate) {
+				if (llm_cache->is_destroying) {
+					pr_err("!!!search %s during destroying\n", path);
+					spin_unlock(&llm_cache->lock);
+					continue;
+				}else if ( llm_cache->idx == idx && !(llm_cache->flags & DBUF_CACHE_IN_ALLOC )){
+					pr_debug("find llm_cache for %s allocate:%d\n", path, allocate);
+					target_cache = llm_cache;
+					llm_cache->flags |= DBUF_CACHE_IN_ALLOC;
+					spin_unlock(&llm_cache->lock);
+					break;
+				}
+			}else {
+				/* dbuf has not been released or llm_cache is destroying */
+				if (llm_cache->flags & (DBUF_CACHE_IN_USAGE | DBUF_CACHE_DIRECT_RECLAIM)) {
+					pr_info("heap in used %p\n",llm_cache);
+					spin_unlock(&llm_cache->lock);
+					continue;
+				}
+				if (llm_cache->is_destroying) {
+					pr_debug("%s allocation during destoying\n", path);
+					spin_unlock(&llm_cache->lock);
+					continue;
+				}
 
-			/* dbuf has not been released or llm_cache is destroying */
-			if (llm_cache->flags & DBUF_CACHE_DISABLE_SHRINK) {
-				pr_info("share new heap %p\n",llm_cache);
-				// spin_unlock(&llm_cache->lock);
-				// rcu_read_unlock();
-				// return ERR_PTR(-EBUSY);
-			}
-			if (llm_cache->is_destroying) {
-				pr_debug("ERROR!!!%s new %s allocation during destoying\n", __func__, path);
+				llm_cache->flags |= DBUF_CACHE_IN_USAGE;
+				llm_cache->allocated_pages = 0;
+				llm_cache->stop_aio_worker = 0;
+				llm_cache->read_pages = llm_cache->remained_pages;
+				pr_debug("got llm_cache %p for %s allocate:%d\n",llm_cache, path, allocate);
+				target_cache = llm_cache;
 				spin_unlock(&llm_cache->lock);
-				rcu_read_unlock();
-				return ERR_PTR(-EBUSY);
+				break;
 			}
-
-			/* Okay, everything is fine */
-			llm_cache->flags |= DBUF_CACHE_DISABLE_SHRINK;
-			llm_cache->allocated_pages = 0;
-			llm_cache->stop_aio_worker = 0;
-			llm_cache->read_pages = llm_cache->remained_pages;
-			pr_debug("%s got llm_cache for %s allocate:%d\n", __func__, path, allocate);
-			spin_unlock(&llm_cache->lock);
-			rcu_read_unlock();
-			return llm_cache;
+		spin_unlock(&llm_cache->lock);
 		}
 	}
-
 	rcu_read_unlock();
-	return NULL;
+	return target_cache;
 }
 
 static struct llmheap_buf_cache *find_and_prep_destroy_dmabuf_cache_by_path(char *path)
@@ -295,31 +300,30 @@ static struct llmheap_buf_cache *find_and_prep_destroy_dmabuf_cache_by_path(char
 	list_for_each_entry_rcu(llm_cache, &llm_cache_list, list) {
 		if (!strcmp(llm_cache->bin_path, path)) {
 			spin_lock(&llm_cache->lock);
-			if (llm_cache->flags & DBUF_CACHE_DISABLE_SHRINK) {
+			if (llm_cache->flags & DBUF_CACHE_IN_USAGE) {
 				pr_err_ratelimited("ERROR!!!%s destroy llm_cache %s before releasing\n",
 					__func__, llm_cache->bin_path);
 				spin_unlock(&llm_cache->lock);
-				llm_cache = ERR_PTR(-EBUSY);
-				rcu_read_unlock();
-				return llm_cache;
+				continue;
 			}
 
 			if (llm_cache->is_destroying) {
 				pr_err("ERROR!!!%s search %s during destoying\n", __func__, path);
 				spin_unlock(&llm_cache->lock);
 				llm_cache = NULL;
+				continue;
 			} else {
 				llm_cache->is_destroying = DESTROY_STAGE1;
 			}
-			if (llm_cache)
-				spin_unlock(&llm_cache->lock);
-			rcu_read_unlock();
-			return llm_cache;
+			spin_unlock(&llm_cache->lock);
+			if (llm_cache){
+				break;
+			}
 		}
 	}
 	rcu_read_unlock();
 
-	return NULL;
+	return llm_cache;
 }
 
 #define ASYNC_BATCH_IO 32
@@ -343,6 +347,7 @@ static int llmheap_do_batch_io(struct llmheap_aio *io, struct llmheap_buf_cache 
 		struct kiocb kiocb;
 		int nr = (io->len - len) >= ASYNC_BATCH_SIZE ?  ASYNC_BATCH_IO : (io->len - len) / PAGE_SIZE;
 		int ret;
+		int cnt = 0;
 
 retry:
 
@@ -350,8 +355,8 @@ retry:
 			bvec[i].bv_page = io->pages[io->page_pos + len/PAGE_SIZE +  i];
 
 			if (!bvec[i].bv_page)
-				pr_err("!!!!!!!ERROR %s for %s pos: %ld allocated_pages %ld read_pages:%lx nr_reclaimed:%ld flags:%lx\n",
-					__func__, llm_cache->bin_path,
+				pr_err("error for %s pos: %ld allocated_pages %ld read_pages:%lx nr_reclaimed:%ld flags:%lx\n",
+					llm_cache->bin_path,
 					(unsigned long)((io->pos + len)/ PAGE_SIZE + i),
 					llm_cache->allocated_pages,
 					llm_cache->read_pages,
@@ -373,9 +378,9 @@ retry:
 			return ret;
 		}
 		if ((ret == -EAGAIN )|| (( ret > 0 ) && (ret != nr* PAGE_SIZE ))) {
+			WARN_ON_ONCE(cnt++> 1000);
 			schedule_timeout_uninterruptible(1);
-			pr_err_ratelimited("%s AIO retry %lld:%ld:%ld:%d \n",
-				__func__, io->pos, io->page_pos, len, ret);
+			pr_err_ratelimited("AIO retry %lld:%ld:%ld:%d \n",io->pos, io->page_pos, len, ret);
 			goto retry;
 		}
 	}
@@ -485,14 +490,14 @@ static struct llmheap_buf_cache *create_llm_cache(char *path,
 	memset(llm_cache->pages, 0, nr_pages * sizeof(struct page *));
 	spin_lock_init(&llm_cache->lock);
 
-	llm_cache->flags |= DBUF_CACHE_DISABLE_SHRINK;
+	llm_cache->flags |= DBUF_CACHE_IN_USAGE;
 	smp_mb();
 
 	spin_lock(&llm_cache_lock);
 	list_add_tail_rcu(&llm_cache->list, &llm_cache_list);
 	spin_unlock(&llm_cache_lock);
 
-	pr_debug("%s heap for %s pg:%ld n", __func__, path, llm_cache->total_pages);
+	pr_debug("create heap %p for %s pg:%ld n", llm_cache, path, llm_cache->total_pages);
 
 	return llm_cache;
 }
@@ -503,13 +508,12 @@ static struct llmheap_buf_cache *create_llm_cache(char *path,
 /********************* shrink func *********************/
 void llm_cache_destroy(struct llmheap_buf_cache *target_cache)
 {
-	struct llmheap_buf_cache *llm_cache, *sync_llm_cache = NULL;
+	struct llmheap_buf_cache *sync_llm_cache = NULL;
 
-again:
 	spin_lock(&llm_cache_lock);
 	if (target_cache) {
 		spin_lock(&target_cache->lock);
-		if (!(target_cache->flags & DBUF_CACHE_DISABLE_SHRINK)
+		if (!(target_cache->flags & DBUF_CACHE_IN_USAGE)
 		    && !target_cache->remained_pages &&
 		    target_cache->is_destroying ==  DESTROY_STAGE1) {
 			target_cache->is_destroying = DESTROY_STAGE2;
@@ -517,37 +521,12 @@ again:
 			list_del_rcu(&target_cache->list);
 		}
 		spin_unlock(&target_cache->lock);
-		goto unlock;
 	}
-
-	if (!list_empty(&llm_cache_list)) {
-		list_for_each_entry_rcu(llm_cache, &llm_cache_list, list) {
-			spin_lock(&llm_cache->lock);
-			if (!(llm_cache->flags & DBUF_CACHE_DISABLE_SHRINK)
-					&& !llm_cache->remained_pages &&
-					llm_cache->is_destroying == DESTROY_STAGE1) {
-				sync_llm_cache = llm_cache;
-				llm_cache->is_destroying = DESTROY_STAGE2;
-				list_del_rcu(&llm_cache->list);
-				spin_unlock(&llm_cache->lock);
-				break;
-			}
-			spin_unlock(&llm_cache->lock);
-		}
-	}
-
-unlock:
 	spin_unlock(&llm_cache_lock);
-
 	if (sync_llm_cache) {
 		synchronize_rcu();
 		vfree(sync_llm_cache->pages);
 		kfree(sync_llm_cache);
-		/* we are destroying all */
-		if (!target_cache) {
-			sync_llm_cache = NULL;
-			goto again;
-		}
 	}
 }
 
@@ -569,7 +548,7 @@ unsigned long llm_cache_shrink(gfp_t gfp_mask, unsigned long nr_to_scan,
 	rcu_read_lock();
 	list_for_each_entry_rcu(llm_cache, &llm_cache_list, list) {
 		if (only_scan) {
-			if (!(READ_ONCE(llm_cache->flags) & DBUF_CACHE_DISABLE_SHRINK)){
+			if (!(READ_ONCE(llm_cache->flags) & DBUF_CACHE_IN_USAGE)){
 				nr_total += llm_cache->remained_pages;
 				found_shrink = true;
 			}
@@ -579,11 +558,11 @@ unsigned long llm_cache_shrink(gfp_t gfp_mask, unsigned long nr_to_scan,
 
 			while (nr_total < nr_to_scan) {
 				spin_lock(&llm_cache->lock);
-				if ((READ_ONCE(llm_cache->flags) & DBUF_CACHE_DISABLE_SHRINK) ||
+				if ((READ_ONCE(llm_cache->flags) & DBUF_CACHE_IN_USAGE) ||
 				     READ_ONCE(llm_cache->remained_pages) == 0 ||
 				     READ_ONCE(llm_cache->is_destroying) == DESTROY_STAGE2) {
 					spin_unlock(&llm_cache->lock);
-					if (!READ_ONCE(llm_cache->is_destroying) && (!(READ_ONCE(llm_cache->flags) & DBUF_CACHE_DISABLE_SHRINK)))
+					if (!READ_ONCE(llm_cache->is_destroying) && (!(READ_ONCE(llm_cache->flags) & DBUF_CACHE_IN_USAGE)))
 					{
 						llm_cache_dropped = llm_cache;
 					}
@@ -593,7 +572,7 @@ unsigned long llm_cache_shrink(gfp_t gfp_mask, unsigned long nr_to_scan,
 				last_valid_idx = llm_cache->remained_pages - 1;
 				page = llm_cache->pages[last_valid_idx];
 				if (!page) {
-					pr_info("%s last %ld remain %ld\n", __func__, last_valid_idx, llm_cache->remained_pages );
+					pr_info("last %ld remain %ld\n", last_valid_idx, llm_cache->remained_pages );
 					continue;
 				}
 				head = compound_head(page);
@@ -664,12 +643,12 @@ int cache_stat_info(char *buf,  int size)
 		tot_size = llm_cache->total_pages << PAGE_SHIFT;
 		valid_size = llm_cache->remained_pages << PAGE_SHIFT;
 		read_size = llm_cache->read_pages << PAGE_SHIFT;
-		n += snprintf(buf+n,size-n, "cache:%ld path:%s pos:%lld(byte)-%lld(page) dma_buf:%lx\n",
+		n += snprintf(buf+n,size-n, "cache:%ld path:%s pos:%llx(byte)-%llx(page) dma_buf:%lx\n",
 				i++, llm_cache->bin_path, llm_cache->pos, llm_cache->pos >> PAGE_SHIFT,
 				(unsigned long)llm_cache->dbuf);
-		n += snprintf(buf+n, size -n, "  state: dis_shink:%d reclaimed:%ld\n",
-				llm_cache->flags & DBUF_CACHE_DISABLE_SHRINK ? 1 : 0, llm_cache->nr_reclaimed);
-		n += snprintf(buf+n, size-n, "  size: t:[%ld pg (%ld M)] v:[%ld pg (%ld M)] r:[%ld pg (%ld M)]\n\n",
+		n += snprintf(buf+n, size -n, "  state: in_use:%d reclaimed:%lx\n",
+				llm_cache->flags & DBUF_CACHE_IN_USAGE ? 1 : 0, llm_cache->nr_reclaimed);
+		n += snprintf(buf+n, size-n, "  size: t:[%lx pg (%ld M)] v:[%lx pg (%ld M)] r:[%lx pg (%ld M)]\n\n",
 				llm_cache->total_pages, tot_size / SZ_1M,
 				llm_cache->remained_pages, valid_size / SZ_1M,
 				llm_cache->read_pages, read_size / SZ_1M);

@@ -473,7 +473,7 @@ int system_qcom_sg_buffer_alloc(struct dma_heap *heap,
 		buffer->dbuf = dbuf;
 		size_remaining = len;
 
-		pr_debug("%s llmheap  len 0x%lx %p->%p\n",__func__, len, buffer, dbuf);
+		pr_debug("llmheap  len 0x%lx %p->%p\n",len, buffer, dbuf);
 	}
 #endif /* CONFIG_DMABUF_LLM_HEAPS */
 
@@ -501,7 +501,6 @@ int system_qcom_sg_buffer_alloc(struct dma_heap *heap,
 			len += compound_nr(page);
 			i++;
 		}while( size_remaining > 0);
-		pr_debug("%s size remain %ld done total %ld  i %d\n", __func__, size_remaining, len, i);
 	}
 #endif /* CONFIG_DMABUF_LLM_HEAPS */
 	while (size_remaining > 0) {

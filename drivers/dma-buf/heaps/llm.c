@@ -42,7 +42,6 @@ static DEFINE_MUTEX(llmheap_mutex);
 static int llmheap_do_batch_io(struct llmheap_io *io)
 {
 	int ret = 0;
-	// pr_debug("%s pos %lld len %ld ppos %ld\n", __func__, io->pos, io->len, io->page_pos);
 	for (unsigned long len = 0; len < io->len; len += BATCH_SIZE) {
 		struct bio_vec *bvec = io->bvec;
 		struct iov_iter iter;
@@ -96,7 +95,8 @@ long llmheap_handle_load_data(unsigned long arg)
 	struct dma_buf *dbuf;
 	loff_t pos, size;
 	struct file *bin_file;
-	int ret = 0;
+	int idx = -2;
+	int ret;
 
 	struct llmheap_buf_cache *llm_cache;
 	unsigned long off;
@@ -116,6 +116,10 @@ long llmheap_handle_load_data(unsigned long arg)
 
 	/* reset ret=0 */
 	ret = 0;
+	if (buf.size & LLM_HEAP_FLAG) {
+		idx = (buf.size >> 48) & (~(1 << 15));
+		buf.size = buf.size & (SZ_4G - 1);
+	}
 
 	pos = buf.file_offs;
 	buf.bin_path[LLMHEAP_PATH_MAX - 1] = 0;
@@ -132,7 +136,7 @@ long llmheap_handle_load_data(unsigned long arg)
 	}
 	size = i_size_read(file_inode(bin_file));
 	if (size > SZ_4G || pos >= size ) {
-		pr_info("%s exceed size  %lld\n", __func__, size);
+		pr_info("exceed size  %lld\n", size);
 		fput(bin_file);
 		return -EINVAL;
 	}
@@ -140,14 +144,14 @@ long llmheap_handle_load_data(unsigned long arg)
 
 	dbuf = dma_buf_get(buf.dma_buf_fd);
 	if (IS_ERR(dbuf)) {
-		pr_err("%s fail to dma_buf_get", __func__);
+		pr_err("fail to dma_buf_get\n");
 		fput(bin_file);
 		return PTR_ERR(dbuf);
 	}
 
 	mutex_lock(&llmheap_mutex);
 
-	llm_cache = find_llm_cache_by_path(buf.bin_path, pos, false);
+	llm_cache = find_llm_cache_by_path(buf.bin_path, pos,DIV_ROUND_UP(buf.size, PAGE_SIZE), idx, false);
 
 
 	if (likely(llm_cache)) {
@@ -173,9 +177,9 @@ long llmheap_handle_load_data(unsigned long arg)
 			buf.size = 0;
 		}
 
-		if (!(llm_cache->flags & DBUF_CACHE_DISABLE_SHRINK)) {
-			pr_err("ERROR!!! %s calling pass-through on %s whose dma-buf has been closed\n",
-				__func__, buf.bin_path);
+		if (!(llm_cache->flags & DBUF_CACHE_IN_USAGE)) {
+			pr_err("!!!  %s whose dma-buf has been closed\n",
+				buf.bin_path);
 			spin_unlock(&llm_cache->lock);
 			mutex_unlock(&llmheap_mutex);
 			dma_buf_put(dbuf);
@@ -183,7 +187,6 @@ long llmheap_handle_load_data(unsigned long arg)
 			return -EINVAL;
 		}
 
-		// pr_info("%s  pos %lld buf.size %lld\n", __func__, pos, buf.size);
 		if (!buf.size) {
 			llm_cache->stop_aio_worker = 1;
 			spin_unlock(&llm_cache->lock);
@@ -192,12 +195,13 @@ long llmheap_handle_load_data(unsigned long arg)
 				fput(llm_cache->bin_file);
 			llm_cache->bin_file = NULL;
 			mutex_unlock(&llmheap_mutex);
-			pr_info("%s no read: cache:%lx v:%ld r:%ld t:%ld\n",
-				__func__, (unsigned long)llm_cache, llm_cache->remained_pages, llm_cache->read_pages,
+			pr_info("no read: cache:%lx v:%ld r:%ld t:%ld\n",
+				(unsigned long)llm_cache, llm_cache->remained_pages, llm_cache->read_pages,
 				llm_cache->total_pages);
 			dma_buf_put(dbuf);
 			fput(bin_file);
-
+			if (!cache_enabled())
+				llm_cache->flags |= DBUF_CACHE_DIRECT_RECLAIM;
 			return 0;
 		}
 		spin_unlock(&llm_cache->lock);
@@ -210,8 +214,8 @@ long llmheap_handle_load_data(unsigned long arg)
 		return -EINVAL;
 	}
 
-	pr_info("%s start read: heap:%lx v:%ld r:%ld t:%ld\n",
-		__func__, (unsigned long)llm_cache, llm_cache->remained_pages, llm_cache->read_pages,
+	pr_info("start read: heap:%lx v:%ld r:%ld t:%ld\n",
+		(unsigned long)llm_cache, llm_cache->remained_pages, llm_cache->read_pages,
 		llm_cache->total_pages);
 
 	do {
@@ -219,7 +223,6 @@ long llmheap_handle_load_data(unsigned long arg)
 		unsigned long len = buf.size - remained_len;
 		int i = 0;
 
-		// pr_debug("%s len %ld remained_len %ld\n", __func__, len, remained_len);
 		if (len > 0) {
 			for (i = 0; i < AIIO_THREADS; i++) {
 				io[i].filp = bin_file;
@@ -230,7 +233,7 @@ long llmheap_handle_load_data(unsigned long arg)
 				io[i].max_pages = llm_cache->total_pages;
 				tasks[i] = kthread_create(llmheap_io_task, &io[i], "llmheap_io/%d", i);
 				if (IS_ERR(tasks[i])) {
-					pr_err("%s failed to create io thread%d\n", __func__, i);
+					pr_err("failed to create io thread%d\n", i);
 					break;
 				}
 			}
@@ -339,13 +342,13 @@ out:
 				spin_unlock(&llm_cache->lock);
 			}
 			ret = task_ret;
-			pr_err("%s thread%i io failed, ret:%d\n", __func__, i, ret);
+			pr_err("thread%i io failed, ret:%d\n", i, ret);
 		}
 	}
 	mutex_unlock(&llmheap_mutex);
 
-	pr_info("%s end read: heap:%lx v:%ld r:%ld t:%ld ret:%d\n",
-		__func__, (unsigned long)llm_cache, llm_cache->remained_pages, llm_cache->read_pages,
+	pr_info("end read: heap:%lx v:%ld r:%ld t:%ld ret:%d\n",
+		(unsigned long)llm_cache, llm_cache->remained_pages, llm_cache->read_pages,
 		llm_cache->total_pages, ret);
 	dma_buf_put(dbuf);
 	fput(bin_file);

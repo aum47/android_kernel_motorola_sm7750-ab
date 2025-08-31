@@ -24,7 +24,7 @@
 #define LLMHEAP_IOCTL_DEPOSIT_FILE  _IOWR('l', 1, struct llm_file_info)
 
 DEFINE_STATIC_KEY_TRUE(llmheap_enable);
-DEFINE_STATIC_KEY_TRUE(cache_enable);
+DEFINE_STATIC_KEY_FALSE(cache_enable);
 
 
 static int llmheap_open(struct inode *inode, struct file *file)
@@ -71,9 +71,9 @@ static ssize_t enabled_store(struct device *dev, struct device_attribute *attr,
     ret = kstrtoint(buf, 10, &opt);
     if (ret == 0)
     {
-        if (opt)
+        if ((opt) && !llmheap_enabled())
             static_branch_enable(&llmheap_enable);
-        else
+        else if ((!opt ) && llmheap_enabled())
             static_branch_disable(&llmheap_enable);
     }
     return count;
@@ -96,10 +96,13 @@ static ssize_t cache_store(struct device *dev, struct device_attribute *attr,
     ret = kstrtoint(buf, 10, &opt);
     if (ret == 0)
     {
-        if (opt)
+        if ((opt) && !cache_enabled())
             static_branch_enable(&cache_enable);
-        else
+        else if ((!opt ) && cache_enabled())
+        {
             static_branch_disable(&cache_enable);
+            llm_cache_drop_all();
+        }
     }
     return count;
 }

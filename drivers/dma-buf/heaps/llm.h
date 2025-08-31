@@ -4,8 +4,9 @@
 #ifndef __LLM_H__
 #define __LLM_H__
 
-#define DBUF_CACHE_DISABLE_SHRINK	0x1
-#define DBUF_CACHE_DIRECT_RECLAIM   0x2
+#define DBUF_CACHE_IN_USAGE	 0x1
+#define DBUF_CACHE_IN_ALLOC	 0x2
+#define DBUF_CACHE_DIRECT_RECLAIM   0x4
 
 #define LLMHEAP_PATH_MAX 512
 
@@ -28,6 +29,7 @@ struct llmheap_buf_cache {
 	char bin_path[LLMHEAP_PATH_MAX];
 	struct file *bin_file;
 	int fd;
+	int idx;
 };
 
 struct llm_load_dma_buf {
@@ -59,8 +61,7 @@ struct llm_file_info {
 
 
 DECLARE_STATIC_KEY_TRUE(llmheap_enable);
-DECLARE_STATIC_KEY_TRUE(cache_enable);
-
+DECLARE_STATIC_KEY_FALSE(cache_enable);
 
 static inline bool llmheap_enabled(void)
 {
@@ -75,7 +76,7 @@ static inline bool cache_enabled(void)
 int llmheap_dev_init(void);
 int llm_heap_fs_init(void);
 int llm_cache_init(void);
-struct llmheap_buf_cache *find_llm_cache_by_path(char *path, loff_t pos, bool allocate);
+struct llmheap_buf_cache *find_llm_cache_by_path(char *path, loff_t pos, unsigned long pages, int idx, bool allocate);
 struct llmheap_buf_cache *create_llm_cache_by_idx(int param_idx, unsigned long len);
 struct llmheap_buf_cache *find_llm_cache_by_idx(int param_idx);
 
@@ -83,7 +84,6 @@ int llm_cache_drop_all(void);
 
 long llmheap_handle_deposit_file_info(unsigned long arg);
 int llmheap_handle_withdraw_file_info(int param_idx);
-
 
 unsigned long llm_cache_shrink(gfp_t gfp_mask, unsigned long nr_to_scan,
 					struct llmheap_buf_cache *target_cache);
